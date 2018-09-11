@@ -1,0 +1,7 @@
+*~
+ckpt*
+log*
+val_out/
+vgg16*
+test_out/
+meta/
