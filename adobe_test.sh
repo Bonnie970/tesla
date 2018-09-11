@@ -1,0 +1,9 @@
+CUDA_VISIBLE_DEVICES=0 python matting_test.py \
+    --pred_path=/home/vortex/bonniehu/Segmentation-Refinement/pred_path\
+	--trimap_path="/home/vortex/bonniehu/Adobe_data/Test_set/Adobe-licensed images/trimaps"\
+	--rgb_path="/home/vortex/bonniehu/Adobe_data/Test_set/composed_images"\
+	--log_dir=/home/vortex/bonniehu/Segmentation-Refinement/test_log\
+	--save_ckpt_path=/home/vortex/bonniehu/Segmentation-Refinement/ckpt_1\
+	--dataset_name=Adobe \
+	--image_height=320 \
+	--image_width=320 \
