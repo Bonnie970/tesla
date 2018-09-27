@@ -212,6 +212,7 @@ def main(_):
             #print FLAGS.fine_tune_ckpt_path is None
             #if FLAGS.fine_tune_ckpt_path is None:
             print('Restoring first stage ckpt...')
+            print FLAGS.first_stage_ckpt_path
             saver.restore(sess,tf.train.latest_checkpoint(FLAGS.first_stage_ckpt_path))
             global_step.assign(0).eval()
             #else:

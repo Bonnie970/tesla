@@ -72,7 +72,7 @@ def main(_):
     #is_training = tf.Variable(0,name='is_training',trainable=False)
     #tf.add_to_collection("is_training", is_training)
     
-    images = tf.map_fn(lambda img: image_preprocessing(img, is_training=True), train_batch)
+    images = tf.map_fn(lambda img: image_preprocessing(img, is_training=False), train_batch)
     # images = tf.map_fn(lambda img: image_preprocessing(img, is_training=True), train_batch)
     
     b_GTmatte, b_trimap, b_RGB, b_GTFG, b_GTBG, raw_RGBs = tf.split(images, [1, 1, 3, 3, 3, 3], 3)
@@ -241,11 +241,11 @@ def main(_):
                 _,loss,summary_str,step= sess.run([train_op,total_loss,summary_op,global_step],feed_dict = feed)
                 #print os.system('nvidia-smi')
                 train_end = timeit.default_timer()
-                if step%FLAGS.save_ckpt_steps == 0:
+                if step%FLAGS.save_ckpt_steps == 2:
                     saver.export_meta_graph(FLAGS.save_meta_path)
                     print('saving model......')
                     saver.save(sess,FLAGS.save_ckpt_path + '/model.ckpt',global_step = global_step, write_meta_graph = True)
-                if step%FLAGS.save_ckpt_steps == 1:
+                if step%FLAGS.save_ckpt_steps == 2:
                     print('test on validation data...')
                     val_loss = []
                     validation_dir = '/home/vortex/bonniehu/Val_data/'#'/home/vortex/bonniehu/Adobe_data/Test_set/'

@@ -104,6 +104,12 @@ def unpool(pool, ind, ksize=[1, 2, 2, 1], scope='unpool'):
 
 
 def crop_patch(trimap,cropsize,dataset):
+    '''
+    Crop patch based on crop size 
+    randomly select eligible crop center, return crop center
+    Only used for training purpose to avoid overfitting 
+    Not good for test case where whole image needs to be considered - check crop_path_whole_image()
+    '''
     border = cropsize / 2 - 1
     if dataset == "DAVIS":
         temp = np.where(trimap[border:-border-1, border:-border-1]>0)
@@ -115,6 +121,77 @@ def crop_patch(trimap,cropsize,dataset):
     candidates = np.array([temp[0] + border, temp[1] + border])
     index = np.random.choice(len(candidates[0]))
     return [candidates[0][index], candidates[1][index]]
+
+def get_crop_center(trimap,cropsize):
+    '''
+    similar to crop_patch(), but considers whole area of image
+    when crop center is too close to border, move it to closest crop_size/2 position 
+    '''
+    border = cropsize / 2 - 1
+    temp = np.where(trimap==128)
+    if len(temp[0])==0 or len(temp[1])==0:
+        return None
+    # add boarder to temp, so that the coordinate is relative to trimap, not trimap[border:-border-1, border:-border-1]
+    candidates = np.array([temp[0], temp[1]])
+    index = np.random.choice(len(candidates[0]))
+    # check if crop_center too close to border 
+    crop_center = [candidates[0][index], candidates[1][index]]
+    crop_center[0] = max(border, crop_center[0])
+    crop_center[0] = min(trimap.shape[0]-border-1, crop_center[0])
+    crop_center[1] = max(border, crop_center[1])
+    crop_center[1] = min(trimap.shape[1]-border-1, crop_center[1])
+    print crop_center
+    return crop_center 
+
+def get_border(crop_center, crop_size, shape):
+    row_start = crop_center[0] - crop_size / 2 + 1
+    row_end = crop_center[0] + crop_size / 2 + 1#- 1
+    col_start = crop_center[1] - crop_size / 2 + 1
+    col_end = crop_center[1] + crop_size / 2 + 1#- 1
+    if row_end > shape[0]:
+        row_start -= (row_end - shape[0])
+        row_end = shape[0]
+    if col_end > shape[1]:
+        col_start -= (col_end - shape[1])
+        col_end = shape[1]
+    return row_start, row_end, col_start, col_end
+
+def crop_patch_whole_image(trimap):
+    '''
+    return multiple (crop_center, crop_size) pairs that 
+    covers the whole trimap unknown region
+    '''
+    crop_size = 320#np.random.choice(sample_patch_size)
+    patch_border = []
+
+    # crop along border first 
+    upper_row = crop_size / 2 - 1
+    left_col = crop_size / 2 - 1
+    bottom_row = trimap.shape[0] - crop_size / 2 + 1
+    right_col = trimap.shape[1] - crop_size / 2 + 1
+    crop_centers = [(upper_row, crop_size / 2 - 1 + x*320) for x in range(trimap.shape[1]/crop_size)]
+    crop_centers += [(bottom_row, crop_size / 2 - 1 + x*320) for x in range(trimap.shape[1]/crop_size)]
+    crop_centers += [(crop_size / 2 - 1 + x*320, left_col) for x in range(trimap.shape[0]/crop_size)]
+    crop_centers += [(crop_size / 2 - 1 + x*320, right_col) for x in range(trimap.shape[0]/crop_size)]
+    crop_centers.append((upper_row, left_col))
+    crop_centers.append((bottom_row, right_col))
+    crop_centers = list(set(crop_centers))
+    for crop_center in crop_centers:
+        row_start, row_end, col_start, col_end = get_border(crop_center, crop_size, trimap.shape)
+        temp = np.where(trimap[row_start:row_end, col_start:col_end, :] == 128)
+        if len(temp[0])==0 and len(temp[1])==0:
+            print crop_center,  (row_start, row_end, col_start, col_end) 
+            continue
+        patch_border.append((row_start, row_end, col_start, col_end))
+    # then crop middle parts
+    crop_center = crop_patch(trimap, crop_size,'adobe')
+    while crop_center is not None:
+        row_start, row_end, col_start, col_end = get_border(crop_center, crop_size, trimap.shape)
+        patch_border.append((row_start, row_end, col_start, col_end))
+        # set existing trimap patch region to 0, as known region  
+        trimap[row_start:row_end, col_start:col_end, :] = 0
+        crop_center  = crop_patch(trimap, crop_size,'adobe')
+    return list(set(patch_border)), trimap 
 
 def load_path(alphas, trimaps, RGBs):
     '''
@@ -287,6 +364,12 @@ def load_single_image_adobe(alpha_path, FG_path, BG_path, RGB_path):
 	return batch_i
 
 def load_single_image_predict(trimap_path, RGB_path, alpha_path=None):
+    trimap = misc.imread(trimap_path,'L')
+    trimap = np.expand_dims(trimap,2)
+    rgb = misc.imread(RGB_path)
+    if alpha_path is not None:
+        alpha = misc.imread(alpha_path,'L')
+        alpha = np.expand_dims(alpha,2)
     crop_size = np.random.choice(sample_patch_size)
     crop_center = crop_patch(trimap[:,:,0], crop_size, 'adobe')
     # crop patch 
@@ -295,25 +378,22 @@ def load_single_image_predict(trimap_path, RGB_path, alpha_path=None):
         row_end = crop_center[0] + crop_size / 2 - 1
         col_start = crop_center[1] - crop_size / 2 + 1
         col_end = crop_center[1] + crop_size / 2 - 1
-
-    trimap = misc.imread(trimap_path,'L')
-    trimap = np.expand_dims(trimap,2)
-    rgb = misc.imread(RGB_path)
-    trimap = trimap[row_start:row_end, col_start:col_end, :]
-    rgb = rgb[row_start:row_end, col_start:col_end, :]
-    if alpha_path is not None:
-        alpha = misc.imread(alpha_path)
-        alpha = alpha[row_start:row_end, col_start:col_end, :]
+        trimap = trimap[row_start:row_end, col_start:col_end, :]
+        rgb = rgb[row_start:row_end, col_start:col_end, :]
+        if alpha_path is not None:
+            alpha = alpha[row_start:row_end, col_start:col_end, :]
     # resize patch to 320x320
     if trimap.shape[0] != image_height:
         if alpha_path is not None:
             alpha = np.expand_dims(misc.imresize(np.squeeze(alpha), (image_height,image_width)),2)
         trimap = np.expand_dims(misc.imresize(np.squeeze(trimap), (image_height,image_width)),2)
         rgb = misc.imresize(rgb, (image_height,image_width))
-    if alpha_path is None:
-        batch_i = np.concatenate([trimap, trimap, rgb - g_mean, rgb - g_mean, rgb - g_mean, rgb - g_mean],2)
-    else: 
+    print trimap.shape, rgb.shape
+    if alpha_path is not None:
+        print alpha.shape, trimap.shape, rgb.shape
         batch_i = np.concatenate([alpha, trimap, rgb - g_mean, rgb - g_mean, rgb - g_mean, rgb - g_mean],2)
+    else: 
+        batch_i = np.concatenate([trimap, trimap, rgb - g_mean, rgb - g_mean, rgb - g_mean, rgb - g_mean],2)
     batch_i = batch_i.astype(np.float32)
     return batch_i
 
