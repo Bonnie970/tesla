@@ -1,4 +1,3 @@
-
 '''
 CUDA_VISIBLE_DEVICES=0 python test.py
 '''
@@ -27,6 +26,7 @@ def main(args):
 	gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction = args.gpu_fraction)
 	with tf.Session(config=tf.ConfigProto(gpu_options = gpu_options)) as sess:
 		#saver = tf.train.import_meta_graph('/home/vortex/bonniehu/Segmentation-Refinement/meta/my-model.meta')
+                
                 saver = tf.train.import_meta_graph(args.meta)
                 print 'Restoring ckpt ', args.ckpt
 		saver.restore(sess,tf.train.latest_checkpoint(args.ckpt))
@@ -35,7 +35,8 @@ def main(args):
                 train_batch = tf.get_collection('train_batch')[0]
                 pred_mattes = tf.get_collection('pred_mattes')[0]
                 alpha_loss = tf.get_collection('alpha_loss')[0]
-		'''
+		
+                '''
                 # read origin images 
                 rgb = misc.imread(args.rgb, mode='RGB')
                 rgb = rgb.astype(np.float32)-g_mean
@@ -118,23 +119,73 @@ def main(args):
                 '''
                 print('test on validation data...')
                 val_loss = []
-                validation_dir = '/home/vortex/bonniehu/Adobe_data/Test_set/'#'/home/vortex/bonniehu/Val_data/'
+                validation_dir = '/home/vortex/bonniehu/Mask_data/'
+                #validation_dir = '/home/vortex/bonniehu/Benchmark_data/Test_set/high_resolution/'
+                #validation_dir = '/home/vortex/bonniehu/Benchmark_data/Test_set/low_resolution/'
+                #validation_dir = '/home/vortex/bonniehu/Adobe_data/Test_set/'
+                #validation_dir = '/home/vortex/bonniehu/Val_data/'
+                #validation_dir = '/home/vortex/bonniehu/Mask_data/'
                 t_paths_alpha, t_paths_trimap, t_paths_FG, t_paths_BG, t_paths_RGB = load_path_adobe(validation_dir+'alpha', validation_dir+'trimaps', validation_dir+'FG', validation_dir+'BG', validation_dir+'RGB', 'no_loss')
                 num_batch = len(t_paths_trimap)/train_batch_size
+
+                for im_index in range(len(t_paths_trimap)):
+                        # crop semi-random 
+                        #im_index = 15
+                        trimap = misc.imread(t_paths_trimap[im_index],'L')
+                        print trimap[0], trimap.shape
+                        trimap = np.expand_dims(trimap,2)
+                        misc.imsave('./result_maskrcnn/trimap_{}.png'.format(im_index), np.squeeze(trimap))
+                        rgb = misc.imread(t_paths_RGB[im_index], mode='RGB')
+                        print rgb.shape
+                        rgb = rgb.astype(np.float32)-g_mean
+                        # initialize alpha as equal to trimap 
+                        alpha = trimap/255 
+                        patch_borders, trimap_return = crop_patch_whole_image(trimap.copy())
+                        # make sure number of patches can be exactly divided into train batch size
+                        if len(patch_borders) % train_batch_size != 0: 
+                                for i in range(train_batch_size - len(patch_borders) % train_batch_size): 
+                                        patch_borders.append(patch_borders[-1])
+                        num_batch = len(patch_borders)/train_batch_size
+                        for i in range(num_batch):
+                                begin_i = i*train_batch_size
+                                end_i = (i+1)*train_batch_size
+                                test_batch = []
+                                for border in patch_borders[begin_i: end_i]:
+                                        patch = trimap[border[0]:border[1], border[2]:border[3]]
+                                        rgb_patch = rgb[border[0]:border[1], border[2]:border[3]]
+                                        #misc.imsave('./patch/patch{}.png'.format(i), np.squeeze(patch))
+                                        print patch.shape, rgb_patch.shape, border
+                                        batch_i = np.concatenate([patch, patch, rgb_patch, rgb_patch, rgb_patch, rgb_patch],2)
+                                        test_batch.append(batch_i)
+                        
+                                test_batch = np.stack(test_batch)
+                                feed = {train_batch:test_batch}
+                                #run matting with trimap and rgb at train_batch_size
+                                test_mattes = sess.run(pred_mattes,feed_dict = feed)
+                                test_mattes.reshape([train_batch_size,image_height,image_width,1])
+                                for j in range(train_batch_size):
+                                        # paste patch results to alpha
+                                        # TODO: TAKE MEAN for multiple values on one pixel
+                                        border = patch_borders[begin_i: end_i][j]
+                                        alpha[border[0]:border[1], border[2]:border[3]] = test_mattes[j]
+                        misc.imsave('./result_maskrcnn/alpha_{}.png'.format(im_index), np.squeeze(alpha))
+                exit()
+                
                 for i in range(num_batch):
                         begin_i = i*train_batch_size
                         end_i = (i+1)*train_batch_size
                         # test_batch = load_data_adobe(batch_alpha_paths=t_paths_alpha[begin_i:end_i], batch_FG_paths=t_paths_FG[begin_i:end_i], batch_BG_paths=t_paths_BG[begin_i:end_i], batch_RGB_paths=t_paths_RGB[begin_i:end_i], no_alpha=True, batch_trimap_paths=t_paths_trimap[begin_i:end_i])
-                        test_batch = load_data_adobe(batch_RGB_paths=t_paths_RGB[begin_i:end_i], loss='no_loss', batch_trimap_paths=t_paths_trimap[begin_i:end_i])
+                        test_batch = load_data_adobe(batch_RGB_paths=t_paths_RGB[begin_i:end_i], loss='no_loss', batch_trimap_paths=t_paths_trimap[begin_i:end_i])#,batch_alpha_paths=t_paths_alpha[begin_i:end_i])
                         feed = {train_batch:test_batch}
                         aloss, val_mattes = sess.run([alpha_loss, pred_mattes],feed_dict = feed)
                         val_mattes.reshape([train_batch_size,image_height,image_width,1])
-                        val_loss.append(loss)
+                        val_loss.append(aloss)
+                        print 'alpha loss is ', aloss 
                         for j in range(train_batch_size):
-                            misc.imsave('./test_out/{}_{}_{}.png'.format(loss,i,j), np.squeeze(val_mattes[j]))
+                            misc.imsave('./test_out/{}_{}_{}.png'.format(aloss,i,j), np.squeeze(val_mattes[j]))
                 val_mean_loss = np.mean(val_loss)
                 print 'length of val_loss ', len(val_loss)
-                print('validation loss is '+ str(val_mean_loss))
+                print('average test loss is '+ str(val_mean_loss))
                 
 def parse_arguments(argv):
 	parser = argparse.ArgumentParser()
